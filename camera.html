@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+  <title>Scanner QR</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: #0a0a0a;
+      color: #f0f0f0;
+      font-family: 'Courier New', monospace;
+      height: 100dvh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      overflow: hidden;
+    }
+
+    #scanner-wrap {
+      position: relative;
+      width: min(90vw, 360px);
+      aspect-ratio: 1;
+      border-radius: 4px;
+      overflow: hidden;
+    }
+
+    #video {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .corner {
+      position: absolute;
+      width: 28px;
+      height: 28px;
+      border-color: #00ff88;
+      border-style: solid;
+      border-width: 0;
+    }
+    .corner.tl { top: 10px; left: 10px; border-top-width: 3px; border-left-width: 3px; }
+    .corner.tr { top: 10px; right: 10px; border-top-width: 3px; border-right-width: 3px; }
+    .corner.bl { bottom: 10px; left: 10px; border-bottom-width: 3px; border-left-width: 3px; }
+    .corner.br { bottom: 10px; right: 10px; border-bottom-width: 3px; border-right-width: 3px; }
+
+    .scan-line {
+      position: absolute;
+      left: 10px; right: 10px;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, #00ff88, transparent);
+      animation: scan 2s ease-in-out infinite;
+      top: 10px;
+    }
+
+    @keyframes scan {
+      0%   { top: 10px; opacity: 1; }
+      90%  { top: calc(100% - 10px); opacity: 1; }
+      100% { top: calc(100% - 10px); opacity: 0; }
+    }
+
+    #status {
+      margin-top: 20px;
+      font-size: 13px;
+      letter-spacing: 0.08em;
+      color: #888;
+      text-transform: uppercase;
+      min-height: 20px;
+      text-align: center;
+    }
+
+    #status.ok  { color: #00ff88; }
+    #status.err { color: #ff4444; }
+
+    #btn-close {
+      margin-top: 24px;
+      background: none;
+      border: 1px solid #333;
+      color: #666;
+      padding: 10px 28px;
+      font-family: inherit;
+      font-size: 12px;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      cursor: pointer;
+      border-radius: 2px;
+      transition: border-color 0.2s, color 0.2s;
+    }
+    #btn-close:hover { border-color: #666; color: #aaa; }
+
+    #canvas { display: none; }
+  </style>
+</head>
+<body>
+
+  <div id="scanner-wrap">
+    <video id="video" autoplay playsinline muted></video>
+    <div class="corner tl"></div>
+    <div class="corner tr"></div>
+    <div class="corner bl"></div>
+    <div class="corner br"></div>
+    <div class="scan-line"></div>
+  </div>
+
+  <canvas id="canvas"></canvas>
+  <p id="status">A iniciar câmara…</p>
+  <button id="btn-close" onclick="closeScanner()">Fechar</button>
+
+  <!-- jsQR library for QR decoding -->
+  <script src="https://cdn.jsdelivr.net/npm/jsqr@1.4.0/dist/jsQR.js"></script>
+  <script>
+    const video   = document.getElementById('video');
+    const canvas  = document.getElementById('canvas');
+    const ctx     = canvas.getContext('2d');
+    const status  = document.getElementById('status');
+
+    let stream = null;
+    let scanning = true;
+    // Accept messages only from your Apps Script origin
+    const ALLOWED_ORIGIN = '*'; // Tighten this to your script URL for extra security
+
+    async function startCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment' },
+          audio: false
+        });
+        video.srcObject = stream;
+        video.addEventListener('loadedmetadata', () => {
+          status.textContent = 'A digitalizar…';
+          requestAnimationFrame(tick);
+        });
+      } catch (err) {
+        status.textContent = 'Câmara bloqueada';
+        status.className = 'err';
+        console.error(err);
+      }
+    }
+
+    function tick() {
+      if (!scanning) return;
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width  = video.videoWidth;
+        canvas.height = video.videoHeight;
+        ctx.drawImage(video, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height, {
+          inversionAttempts: 'dontInvert'
+        });
+        if (code) {
+          scanning = false;
+          status.textContent = 'QR lido com sucesso!';
+          status.className = 'ok';
+          stopCamera();
+          sendResult(code.data);
+          return;
+        }
+      }
+      requestAnimationFrame(tick);
+    }
+
+    function stopCamera() {
+      if (stream) {
+        stream.getTracks().forEach(t => t.stop());
+        stream = null;
+      }
+    }
+
+    function sendResult(value) {
+      // Post the QR value back to the parent Apps Script window
+      if (window.opener) {
+        window.opener.postMessage({ type: 'QR_RESULT', value }, '*');
+        setTimeout(() => window.close(), 800);
+      } else {
+        // Fallback: show the value if opened directly
+        status.textContent = value;
+      }
+    }
+
+    function closeScanner() {
+      scanning = false;
+      stopCamera();
+      if (window.opener) {
+        window.opener.postMessage({ type: 'QR_CANCELLED' }, '*');
+      }
+      window.close();
+    }
+
+    startCamera();
+  </script>
+</body>
+</html>
